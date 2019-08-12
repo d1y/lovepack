@@ -9,6 +9,8 @@ from pyquery import PyQuery as pq
 from colr import color
 from urllib.parse import parse_qs
 from PIL import Image
+from datetime import datetime
+import tqdm
 
 
 '''
@@ -17,12 +19,40 @@ from PIL import Image
 _USERNAME = os.getenv("SUDO_USER") or os.getenv("USER") 
 _HOME = os.path.expanduser('~'+_USERNAME)
 
+_api = 'https://live.kuaishou.com/profile/'
+_headers = {
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.131 Safari/537.36'
+}
+
+def str2JSON( html, flag = False ):
+  '''
+    @tips { 先把拿到的数据转为`dict` }
+    @param {str} - html
+    @return {dict}
+  '''
+  _html = pq(html)
+  _con = _html('#app').next().next().text()
+  _firstStr = _con.index('{')
+  _lastStr = _con.rindex('}')
+  _code = _con[_firstStr:_lastStr]
+  _code = _code[: int( _code.rindex('}') )+1]
+  data_obj = json.loads(_code)['defaultClient']
+  if flag:
+    _title = _html('.profile-user-name').text()
+    return {
+      "title": _title,
+      "data": data_obj
+    };
+  return data_obj;
+
 def _Path( pack = '', debug = False ):
   '''
     @tips { auto create home /lovepack }
     @parmas {str} - pack
   '''
   _path = _HOME+'/lovepack'
+  if not pack[0] == '/':
+    pack = '/' + pack
   if not os.path.isdir(_path):
     print(
       color('create dir: '+ _path, fore='blue')
@@ -36,12 +66,12 @@ def _Path( pack = '', debug = False ):
       color('create dir: '+ _dd, fore='blue')
     )
     os.makedirs(_dd)
-  if not pack[0] == '/':
-    pack = '/' + pack
+  else:
+    if not os.path.isdir(_path+pack):
+      os.makedirs(_path+pack)
   if debug:
     return _path+"/debug"+pack;
   return _path+pack;
-
 
 def kuaishouURL( id = 'WJKGYL_0921', flag = False, debug = False ):
   '''
@@ -51,10 +81,6 @@ def kuaishouURL( id = 'WJKGYL_0921', flag = False, debug = False ):
     @parmas {bool} - debug 调试
     @retrun {list}
   '''
-  _api = 'https://live.kuaishou.com/profile/'
-  _headers = {
-    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.131 Safari/537.36'
-  }
   if debug:
     print(
       'GET:',
@@ -66,17 +92,7 @@ def kuaishouURL( id = 'WJKGYL_0921', flag = False, debug = False ):
     )
     exit()
   _r = requests.get(_api+id, headers=_headers)
-  _html = pq(_r.text)
-  _con = _html('#app').next().next().text()
-  if debug:
-    _file = open(_Path('ks.json', debug = True),'w')
-    _file.write(_con)
-  # get json text
-  _firstStr = _con.index('{')
-  _lastStr = _con.rindex('}')
-  _code = _con[_firstStr:_lastStr]
-  _code = _code[: int( _code.rindex('}') )+1]
-  data_obj = json.loads(_code)['defaultClient']
+  data_obj = str2JSON(_r.text)
 
   _key = '$ROOT_QUERY.publicFeeds({"count":24,"pcursor":"","principalId":"'+id+'"})'
 
@@ -112,16 +128,48 @@ def kuaishouURL( id = 'WJKGYL_0921', flag = False, debug = False ):
     "path": _INFO['name']
   };
 
-def downKuaishou(arr = []):
+def kuaishouVideosURL( photoID, ID ):
+  '''
+    @tips { 获取视频视频下载地址 }
+    @parmas {str} photoID - 图片地址
+    @parmas {str} ID - 用户id
+  '''
+  _r = requests.get(
+    'https://live.kuaishou.com/u/'+ID+'/'+photoID,
+    headers=_headers
+  )
+  _data = str2JSON(
+    html = _r.text,
+    flag = True)
+  _name = _Path(_data['title']+'/videos')
+  if not os.path.isdir(_name):
+    os.makedirs(_name)
+  _key = '$ROOT_QUERY.feedById({"photoId":"%s","principalId":"%s"}).currentWork' % (photoID, ID)
+  _play = _data['data'][_key]
+  _url = _play['playUrl']
+  _file = _play['caption']+'.mp4'
+  _fullpath = _name+'/'+_file
+  save2Media(
+    url = _url,
+    filename = _fullpath
+  )
+
+
+def downKuaishou( id, flag, debug ):
   '''
     @tips { 传递一个拿到的数组,依次下载 }
-    @parmas {list} - arr
+    @parmas {str} - id
+    @parmas {bool} - flag
+    @parmas {bool} - debug
     @retrun
   '''
   # _fs = open(_Path('env', True),'r')
   # _con = json.loads(_fs.read())
-  _tempID = 'WJKGYL_0921'
-  _con =  kuaishouURL( flag = True, debug = True, id = _tempID or 'longjunzhu815')
+  _con =  kuaishouURL(
+    id = id,
+    flag = flag,
+    debug = debug
+  )
   _run = {
     'path': _con['path'],
     'result': []
@@ -138,6 +186,12 @@ def downKuaishou(arr = []):
       _caption = _caption[0:5]+'..'
     _lists = _area['imgUrls']['json']
     if _area['workType'] == 'video':
+      _ed = _area['user']['id'].split(':')[1]
+      _sd = _area['photoId']
+      kuaishouVideosURL(
+        photoID = _sd,
+        ID = _ed
+      ) 
       pass
     elif _lists:
       _run['result'].append(
@@ -146,7 +200,7 @@ def downKuaishou(arr = []):
           "title": _caption
         }
       )
-  webp2jpg( _run )
+      webp2jpg( _run )
 
 def markdown(con):
   '''
@@ -193,27 +247,56 @@ def webp2jpg( p2 ):
       )
       os.makedirs(_tempPath)
     return _tempPath;
+  def _genTimeFile(num):
+    _full = datetime.now()
+    _love = _full.strftime('%Y-%m-%d')+'-'+str(num)+'.webp'
+    return _love;
   for _res in _lists:
     _file = _genPath(_res['title'])
     _urls = _res['list']
     for _i,_url in enumerate(_urls):
-      _nw = _file+'/'+str(_i)+'.webp'
+      _nw = _file+'/'+_genTimeFile(_i)
       save2webp(
         _url = _url,
         _file = _nw
       )
 
 def save2webp( _url,_file ):
-  _r = requests.get(_url)
-  open(_file, 'wb').write(_r.content)
-  _now = _file.replace('.webp','.jpg')
-  print(
-    color('create image: '+_now, fore="blue")
+  # _r = requests.get(_url)
+  # open(_file, 'wb').write(_r.content)
+  save2Media(
+    url = _url,
+    filename = _file
   )
+  _now = _file.replace('.webp','.jpg')
+  # print(
+  #   color('create image: '+_now, fore="blue")
+  # )
   _im = Image.open(_file).convert('RGB')
   _im.save( _now, 'jpeg' )
   os.unlink(_file)
   return _file
+
+def save2Media( url, filename ):
+  '''
+    @tips { 下载大文件显示进度条 }
+    @param {str} - url
+    @param {str} - filename
+  '''
+  r = requests.get(url, stream=True)
+  file_size = int(r.headers['Content-Length'])
+  chunk = 1
+  chunk_size= 1024
+  num_bars = int(file_size / chunk_size)
+  with open(filename, 'wb') as fp:
+    for chunk in tqdm.tqdm(
+      r.iter_content(chunk_size=chunk_size),
+      total= num_bars,
+      unit = 'KB',
+      desc = filename,
+      leave = True
+    ):
+      fp.write(chunk)
 
 def loveFormat( env ):
   '''
@@ -275,12 +358,11 @@ if __name__ == "__main__":
             _id = _parmas['--id'][0]
           else:
             os.system("pause")
-      # _text = kuaishouURL(
-      #   flag = _flag,
-      #   debug = _debug,
-      #   id = _id
-      # )
       if _debug:
         print('_id: ',_id, '_flag: ', _flag, '_debug: ', _debug)
-    downKuaishou()
+      downKuaishou(
+        flag = _flag,
+        debug = _debug,
+        id = _id
+      )
     pass
